@@ -1,94 +1,92 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 import datetime
 
-# --- 配置區：請把你的 Token 貼在這裡 ---
-FINMIND_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiUmF5X0NoZW4iLCJlbWFpbCI6ImNoZW5ydWl4aWFuMDBAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.cRmVp07f_wOgMG3EZNfzZP5cmBRRX7VQX5ugV9fyVEk" 
+# --- 配置區 ---
+FINMIND_TOKEN = "你的_API_TOKEN_貼在這裡" # 請確保引號留著
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 
-# --- 1. 專業級數據抓取函數（帶有緩存） ---
-@st.cache_data(ttl=3600) # 數據會暫存在網頁 1 小時，減少請求次數
-def fetch_taiwan_stock_data(stock_id):
-    """
-    使用 FinMind API 抓取台股歷史數據
-    """
-    # 設定抓取時間（從一年前到今天）
+@st.cache_data(ttl=3600)
+def fetch_data(dataset, stock_id):
     end_date = datetime.date.today().strftime("%Y-%m-%d")
     start_date = (datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
-    
-    parameter = {
-        "dataset": "TaiwanStockPrice",
-        "data_id": stock_id,
-        "start_date": start_date,
-        "end_date": end_date,
-        "token": FINMIND_TOKEN,
-    }
-    
-    try:
-        res = requests.get(FINMIND_URL, params=parameter)
-        data = res.json()
-        
-        if data['msg'] != 'success' or not data['data']:
-            return None
-            
-        df = pd.DataFrame(data['data'])
-        df['date'] = pd.to_datetime(df['date'])
-        df.set_index('date', inplace=True)
-        
-        # 計算技術指標
-        df['MA5'] = df['close'].rolling(window=5).mean()
-        df['MA20'] = df['close'].rolling(window=20).mean()
-        
-        return df
-    except Exception as e:
-        st.error(f"連線失敗: {e}")
-        return None
+    parameter = {"dataset": dataset, "data_id": stock_id, "start_date": start_date, "end_date": end_date, "token": FINMIND_TOKEN}
+    res = requests.get(FINMIND_URL, params=parameter)
+    return pd.DataFrame(res.json()['data'])
 
-# --- 2. 介面設計 ---
-st.set_page_config(page_title="台股專業分析雲端版", layout="wide")
-st.title("🏛️ 台股專業分析系統 (API 穩定版)")
+# --- 1. 介面設定 ---
+st.set_page_config(page_title="專業台股分析系統", layout="wide")
+st.title("📈 專業台股分析系統 (台股配色+全指標版)")
 
-with st.sidebar:
-    st.header("查詢選單")
-    st.info("本系統直接對接金融 API，不限流量且穩定運作。")
-    stock_id = st.text_input("輸入台股代碼", value="2330")
-    analyze_btn = st.button("啟動專業分析")
+stock_id = st.sidebar.text_input("輸入台股代碼", value="2330")
+analyze_btn = st.sidebar.button("開始分析")
 
-# --- 3. 繪圖與呈現 ---
 if analyze_btn:
-    with st.spinner(f'正在調用 API 獲取 {stock_id} 歷史數據...'):
-        df = fetch_taiwan_stock_data(stock_id)
+    with st.spinner('正在讀取各項專業指標...'):
+        # 抓取股價與法人資料
+        df = fetch_data("TaiwanStockPrice", stock_id)
+        inst_df = fetch_data("InstitutionalInvestorsBuySell", stock_id)
         
-        if df is not None:
-            # 建立高級 K 線圖
-            fig = go.Figure(data=[
-                go.Candlestick(
-                    x=df.index,
-                    open=df['open'], high=df['max'],
-                    low=df['min'], close=df['close'],
-                    name='日K線'
-                ),
-                go.Scatter(x=df.index, y=df['MA5'], name='5MA', line=dict(color='yellow', width=1)),
-                go.Scatter(x=df.index, y=df['MA20'], name='20MA', line=dict(color='cyan', width=1))
-            ])
+        if df is not None and not df.empty:
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
             
-            fig.update_layout(
-                template="plotly_dark",
-                xaxis_rangeslider_visible=False,
-                height=600,
-                title=f"{stock_id} 一年期趨勢圖"
-            )
+            # --- 計算指標 ---
+            # 1. MA 線
+            df['MA5'] = df['close'].rolling(5).mean()
+            df['MA20'] = df['close'].rolling(20).mean()
+            df['MA60'] = df['close'].rolling(60).mean()
             
+            # 2. KD 線
+            low_list = df['min'].rolling(9).min()
+            high_list = df['max'].rolling(9).max()
+            rsv = (df['close'] - low_list) / (high_list - low_list) * 100
+            df['K'] = rsv.ewm(com=2).mean()
+            df['D'] = df['K'].ewm(com=2).mean()
+            
+            # 3. MACD
+            exp1 = df['close'].ewm(span=12, adjust=False).mean()
+            exp2 = df['close'].ewm(span=26, adjust=False).mean()
+            df['DIF'] = exp1 - exp2
+            df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
+            df['MACD'] = (df['DIF'] - df['DEA']) * 2
+
+            # --- 建立多圖層圖表 ---
+            fig = make_subplots(rows=4, cols=1, shared_xaxes=True, 
+                                vertical_spacing=0.05, 
+                                row_heights=[0.5, 0.15, 0.15, 0.2])
+
+            # A. K 線圖 (台股配色：漲紅跌綠)
+            fig.add_trace(go.Candlestick(
+                x=df.index, open=df['open'], high=df['max'], low=df['min'], close=df['close'],
+                name='K線', increasing_line_color='#FF0000', decreasing_line_color='#00FF00',
+                increasing_fillcolor='#FF0000', decreasing_fillcolor='#00FF00'
+            ), row=1, col=1)
+            
+            # 三條 MA 線
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], name='5MA', line=dict(color='white', width=1)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20MA', line=dict(color='yellow', width=1)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], name='60MA', line=dict(color='magenta', width=1)), row=1, col=1)
+
+            # B. 成交量
+            fig.add_trace(go.Bar(x=df.index, y=df['Trading_Volume'], name='成交量', marker_color='gray'), row=2, col=1)
+
+            # C. KD 線
+            fig.add_trace(go.Scatter(x=df.index, y=df['K'], name='K值', line=dict(color='cyan')), row=3, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['D'], name='D值', line=dict(color='orange')), row=3, col=1)
+
+            # D. MACD
+            fig.add_trace(go.Bar(x=df.index, y=df['MACD'], name='MACD柱狀圖'), row=4, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['DIF'], name='DIF', line=dict(color='white')), row=4, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['DEA'], name='DEA', line=dict(color='yellow')), row=4, col=1)
+
+            # 設定佈局
+            fig.update_layout(height=900, template="plotly_dark", showlegend=False, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
             
-            # 數據儀表板
-            last = df.iloc[-1]
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("當前收盤", f"{last['close']}")
-            c2.metric("當日成交量", f"{int(last['Trading_Volume'])}")
-            c3.metric("5日均價", f"{last['MA5']:.2f}")
-            c4.metric("20日均價", f"{last['MA20']:.2f}")
+            st.success(f"{stock_id} 分析完成！")
         else:
-            st.error("查無此代碼，或 API Token 已過期。請確認後再試！")
+            st.error("讀取失敗，請檢查代碼或 Token。")
