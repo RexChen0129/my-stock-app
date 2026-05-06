@@ -2,13 +2,17 @@ import streamlit as st
 import sys
 import os
 
-# 1. 這三行是關鍵：強制讓程式去搜尋目前的資料夾
+# 1. 強制讓程式去搜尋「現在這個 app.py 所在的資料夾」
+# 這行能解決你截圖中顯示的 FileNotFoundError
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
 
-# 2. 匯入你的模組（名稱必須跟 GitHub 上的檔名一模一樣）
-import stock_module_v2 as sm
+# 2. 匯入模組（確保 sm 這個簡寫跟下面程式碼對接）
+try:
+    import stock_module_v2 as sm
+except Exception as e:
+    st.error(f"模組載入失敗：{e}")
 
 st.set_page_config(page_title="專業台股分析系統", layout="wide")
 st.title("⚡ 專業股市分析系統 (完整功能版)")
