@@ -5,7 +5,7 @@ import requests
 import datetime
 
 # --- 配置區：請把你的 Token 貼在這裡 ---
-FINMIND_TOKEN = "你的_API_TOKEN_貼在這裡" 
+FINMIND_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiUmF5X0NoZW4iLCJlbWFpbCI6ImNoZW5ydWl4aWFuMDBAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.cRmVp07f_wOgMG3EZNfzZP5cmBRRX7VQX5ugV9fyVEk" 
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 
 # --- 1. 專業級數據抓取函數（帶有緩存） ---
