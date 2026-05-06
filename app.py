@@ -6,7 +6,7 @@ import requests
 import datetime
 
 # --- 配置區 ---
-FINMIND_TOKEN = "你的_API_TOKEN_貼在這裡" # 請確保引號留著
+FINMIND_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiUmF5X0NoZW4iLCJlbWFpbCI6ImNoZW5ydWl4aWFuMDBAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.cRmVp07f_wOgMG3EZNfzZP5cmBRRX7VQX5ugV9fyVEk" # 請確保引號留著
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 
 @st.cache_data(ttl=3600)
