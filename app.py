@@ -2,10 +2,12 @@ import streamlit as st
 import sys
 import os
 
-# 1. 強制讓程式去搜尋目前的資料夾，解決 No module named 'stock_module_v2'
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# 1. 這三行是關鍵：強制讓程式去搜尋目前的資料夾
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
 
-# 2. 匯入你的模組
+# 2. 匯入你的模組（名稱必須跟 GitHub 上的檔名一模一樣）
 import stock_module_v2 as sm
 
 st.set_page_config(page_title="專業台股分析系統", layout="wide")
