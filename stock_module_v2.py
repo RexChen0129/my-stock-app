@@ -1,7 +1,13 @@
 import pandas as pd
 import yfinance as yf
-import pandas_ta as ta
+import os
 
+# 自動安裝 pandas-ta 的小密技
+try:
+    import pandas_ta as ta
+except ImportError:
+    os.system('pip install pandas-ta')
+    import pandas_ta as ta
 def get_processed_data(stock_id):
     target = f"{stock_id}.TW"
     df = yf.download(target, period="1y", interval="1d", auto_adjust=True)
