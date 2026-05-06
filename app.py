@@ -7,27 +7,37 @@ from datetime import datetime
 # --- 1. 原本在模組裡的功能，現在直接寫在這裡 ---
 def get_processed_data(stock_id):
     """
-    下載台股數據並計算簡單均線
+    強化版數據抓取：自動處理台股後置碼與多層標題
     """
-    # 判斷是否需要加上 .TW (針對台股)
-    if not (stock_id.endswith(".TW") or stock_id.endswith(".TWO")):
+    # 1. 自動補上 .TW
+    if not ("." in stock_id):
         target = f"{stock_id}.TW"
     else:
         target = stock_id
         
     try:
-        # 下載過去一年的數據
+        # 2. 使用 yfinance 下載
         df = yf.download(target, period="1y", interval="1d", auto_adjust=True, progress=False)
         
-        if df is None or df.empty:
+        # 3. 處理多層標題 (yfinance 0.2.x 之後常出現的問題)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        if df is None or len(df) < 10: # 確保至少有 10 天數據才能算均線
             return None
             
-        # 手動計算均線，避開 pandas-ta 安裝衝突問題
+        # 4. 強制轉換數值型態，避免計算錯誤
+        df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+        
+        # 5. 計算均線
         df['MA5'] = df['Close'].rolling(window=5).mean()
         df['MA20'] = df['Close'].rolling(window=20).mean()
         
-        return df
-    except Exception:
+        # 6. 剔除空值並回傳
+        return df.dropna(subset=['Close'])
+        
+    except Exception as e:
+        print(f"Error: {e}")
         return None
 
 # --- 2. Streamlit 網頁介面設定 ---
