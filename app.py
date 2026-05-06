@@ -1,7 +1,12 @@
 import streamlit as st
-import stock_module_v2
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import sys
+import os
+
+# 1. 強制讓程式去搜尋目前的資料夾，解決 No module named 'stock_module_v2'
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# 2. 匯入你的模組
+import stock_module_v2 as sm
 
 st.set_page_config(page_title="專業台股分析系統", layout="wide")
 st.title("⚡ 專業股市分析系統 (完整功能版)")
