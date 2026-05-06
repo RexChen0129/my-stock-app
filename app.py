@@ -1,104 +1,88 @@
 import streamlit as st
-import sys
-import os
+import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime
 
-# 1. 強制讓程式搜尋目前目錄
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.append(current_dir)
+# --- 1. 原本在模組裡的功能，現在直接寫在這裡 ---
+def get_processed_data(stock_id):
+    """
+    下載台股數據並計算簡單均線
+    """
+    # 判斷是否需要加上 .TW (針對台股)
+    if not (stock_id.endswith(".TW") or stock_id.endswith(".TWO")):
+        target = f"{stock_id}.TW"
+    else:
+        target = stock_id
+        
+    try:
+        # 下載過去一年的數據
+        df = yf.download(target, period="1y", interval="1d", auto_adjust=True, progress=False)
+        
+        if df is None or df.empty:
+            return None
+            
+        # 手動計算均線，避開 pandas-ta 安裝衝突問題
+        df['MA5'] = df['Close'].rolling(window=5).mean()
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        
+        return df
+    except Exception:
+        return None
 
-# 2. 用 try...except 確保匯入成功
-try:
-    # 改用這種寫法，確保它只找當前資料夾
-    import stock_module_v2 as sm
-except ImportError:
-    # 如果上面失敗，試試看這個備用方案
-    from . import stock_module_v2 as sm
-
+# --- 2. Streamlit 網頁介面設定 ---
 st.set_page_config(page_title="專業台股分析系統", layout="wide")
-st.title("⚡ 專業股市分析系統 (完整功能版)")
 
+st.title("⚡ 專業股市分析系統 (整合穩定版)")
+
+# 側邊欄設定
 with st.sidebar:
     st.header("數據查詢")
     stock_id = st.text_input("請輸入台股代碼", value="2330")
     analyze_btn = st.button("點擊開始分析")
 
+# --- 3. 主要邏輯控制 ---
 if analyze_btn:
-    with st.spinner('正在分析中...'):
-        df = stock_module_v2.get_processed_data(stock_id)
+    with st.spinner('正在從 Yahoo Finance 抓取數據...'):
+        df = get_processed_data(stock_id)
         
         if df is not None:
-            df_view = df.tail(60) # 顯示最近 60 天
-            
-            # 建立五層專業圖表
-            fig = make_subplots(
-                rows=5, cols=1, 
-                shared_xaxes=True, 
-                vertical_spacing=0.03, 
-                subplot_titles=('K線與均線', '成交量', '法人買賣', 'KD指標', 'MACD'),
-                row_heights=[0.4, 0.15, 0.15, 0.15, 0.15]
-            )
-
-            # 1. K線圖
-            fig.add_trace(go.Candlestick(
-                x=df_view.index, open=df_view['Open'], high=df_view['High'],
-                low=df_view['Low'], close=df_view['Close'], name='K線',
-                increasing_line_color='red', decreasing_line_color='green'
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_view.index, y=df_view['MA5'], name='MA5', line=dict(color='gold')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_view.index, y=df_view['MA20'], name='MA20', line=dict(color='#00ccff')), row=1, col=1)
-
-            # 2. 成交量
-            v_colors = ['red' if df_view['Close'].iloc[i] >= df_view['Open'].iloc[i] else 'green' for i in range(len(df_view))]
-            fig.add_trace(go.Bar(x=df_view.index, y=df_view['Volume'], name='成交量', marker_color=v_colors), row=2, col=1)
-
-            # 3. 法人買賣 (Inst_Net)
-            i_colors = ['red' if x >= 0 else 'green' for x in df_view['Inst_Net']]
-            fig.add_trace(go.Bar(x=df_view.index, y=df_view['Inst_Net'], name='法人買賣', marker_color=i_colors), row=3, col=1)
-
-            # 4. KD 指標
-            k_col = [c for c in df.columns if 'STOCHk' in c][0]
-            d_col = [c for c in df.columns if 'STOCHd' in c][0]
-            fig.add_trace(go.Scatter(x=df_view.index, y=df_view[k_col], name='K值', line=dict(color='#00ff88')), row=4, col=1)
-            fig.add_trace(go.Scatter(x=df_view.index, y=df_view[d_col], name='D值', line=dict(color='#00ccff')), row=4, col=1)
-
-            # 5. MACD
-            macd_col = [c for c in df.columns if 'MACD_' in c and 'h' not in c and 's' not in c][0]
-            macd_h_col = [c for c in df.columns if 'MACDh' in c][0]
-            macd_s_col = [c for c in df.columns if 'MACDs' in c][0]
-            m_colors = ['red' if x >= 0 else 'green' for x in df_view[macd_h_col]]
-            
-            fig.add_trace(go.Bar(x=df_view.index, y=df_view[macd_h_col], name='MACD柱', marker_color=m_colors), row=5, col=1)
-            fig.add_trace(go.Scatter(x=df_view.index, y=df_view[macd_col], name='DIF', line=dict(color='#ff00ff')), row=5, col=1)
-            fig.add_trace(go.Scatter(x=df_view.index, y=df_view[macd_s_col], name='DEA', line=dict(color='#ffff00')), row=5, col=1)
-
-            # 全域樣式設定
-            fig.update_layout(
-                height=1000, 
-                template="plotly_dark", 
-                xaxis_rangeslider_visible=False,
-                # 💡 關鍵修正：讓滑鼠移到該位置時，自動顯示所有指標的數據
-                hovermode="x unified", 
-                hoverlabel=dict(
-                    bgcolor="rgba(30, 30, 30, 0.9)",
-                    font_size=13,
-                    font_family="Arial"
+            # 建立 Plotly K 線圖
+            fig = go.Figure(data=[
+                go.Candlestick(
+                    x=df.index,
+                    open=df['Open'],
+                    high=df['High'],
+                    low=df['Low'],
+                    close=df['Close'],
+                    name='K線'
                 ),
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                )
-            )
+                go.Scatter(x=df.index, y=df['MA5'], name='5日線', line=dict(color='orange', width=1)),
+                go.Scatter(x=df.index, y=df['MA20'], name='20日線', line=dict(color='blue', width=1))
+            ])
             
-            # 強制讓 K 線在懸浮時顯示更多細節
-            fig.update_traces(
-                hoverinfo="all", 
-                selector=dict(type='candlestick')
+            fig.update_layout(
+                title=f"{stock_id} 歷史走勢圖",
+                xaxis_title="日期",
+                yaxis_title="股價",
+                xaxis_rangeslider_visible=False,
+                template="plotly_dark", # 使用深色主題，這通常比較好看
+                height=600
             )
             
             st.plotly_chart(fig, use_container_width=True)
+            
+            # 顯示最新數據摘要
+            col1, col2, col3 = st.columns(3)
+            latest = df.iloc[-1]
+            col1.metric("最新收盤價", round(latest['Close'], 2))
+            col2.metric("5日線價格", round(latest['MA5'], 2))
+            col3.metric("20日線價格", round(latest['MA20'], 2))
+            
+            # 顯示原始數據表格
+            with st.expander("查看原始數據"):
+                st.dataframe(df.tail(10))
         else:
-            st.error("❌ 找不到資料。")
+            st.error(f"找不到代碼 {stock_id} 的數據，請檢查代碼是否正確（例如：2330）")
+
+st.info("提示：如果遇到安裝問題，請確認 requirements.txt 只有 streamlit, yfinance, plotly 三個項目。")
