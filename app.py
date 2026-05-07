@@ -5,13 +5,13 @@ from plotly.subplots import make_subplots
 import requests
 import datetime
 
-# --- 1. 配置區 ---
-FINMIND_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiUmF5X0NoZW4iLCJlbWFpbCI6ImNoZW5ydWl4aWFuMDBAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.cRmVp07f_wOgMG3EZNfzZP5cmBRRX7VQX5ugV9fyVEk" 
+# --- 配置區 ---
+FINMIND_TOKEN = "你的_API_TOKEN_貼在這裡" 
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 
 @st.cache_data(ttl=3600)
 def fetch_data(dataset, stock_id):
-    # 抓取 365 天數據，確保左右拖曳可以看到更前面的資料
+    # 💡 抓取 365 天數據，確保「往左拖曳」有歷史資料可以看
     end_date = datetime.date.today().strftime("%Y-%m-%d")
     start_date = (datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
     parameter = {"dataset": dataset, "data_id": stock_id, "start_date": start_date, "end_date": end_date, "token": FINMIND_TOKEN}
@@ -22,15 +22,15 @@ def fetch_data(dataset, stock_id):
     except:
         return pd.DataFrame()
 
-# --- 2. 介面介面 ---
+# --- 介面介面 ---
 st.set_page_config(page_title="專業台股分析系統", layout="wide")
-st.title("📊 專業台股分析系統 (分層強化版)")
+st.title("🚀 專業台股分析系統 (縮放拖曳優化版)")
 
 stock_id = st.sidebar.text_input("輸入台股代碼", value="2330")
 analyze_btn = st.sidebar.button("開始分析")
 
 if analyze_btn:
-    with st.spinner('正在讀取數據並計算指標...'):
+    with st.spinner('正在分析指標...'):
         df = fetch_data("TaiwanStockPrice", stock_id)
         inst_df = fetch_data("InstitutionalInvestorsBuySell", stock_id)
         
@@ -60,60 +60,57 @@ if analyze_btn:
             df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
             df['MACD_hist'] = (df['DIF'] - df['DEA']) * 2
 
-            # --- 3. 繪圖：分 5 層 ---
+            # --- 繪圖設定 ---
             fig = make_subplots(
                 rows=5, cols=1, 
                 shared_xaxes=True, 
-                vertical_spacing=0.03, 
-                row_heights=[0.4, 0.1, 0.1, 0.15, 0.25], # 調整各區塊高度比例
+                vertical_spacing=0.02, 
+                row_heights=[0.4, 0.1, 0.1, 0.15, 0.25],
                 subplot_titles=("【K線與均線】", "【成交量】", "【法人買賣超】", "【KD指標】", "【MACD指標】")
             )
 
-            # A. K線
+            # 💡 增加 K 線寬度，並移除預設的細線
             fig.add_trace(go.Candlestick(
                 x=df.index, open=df['open'], high=df['max'], low=df['min'], close=df['close'],
-                name='K線', increasing_line_color='red', decreasing_line_color='green',
-                hovertemplate="日期: %{x}<br>開盤: %{open}<br>收盤: %{close}<br>最高: %{high}<br>最低: %{low}<extra></extra>"
+                name='K線', increasing_line_color='red', decreasing_line_color='green'
             ), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], name='5MA', line=dict(color='gold', width=1)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20MA', line=dict(color='magenta', width=1)), row=1, col=1)
 
-            # B. 成交量 (修正長條圖)
+            # 均線
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], name='5MA', line=dict(color='gold', width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20MA', line=dict(color='magenta', width=1.5)), row=1, col=1)
+
+            # 成交量
             v_colors = ['red' if c >= o else 'green' for c, o in zip(df['close'], df['open'])]
             fig.add_trace(go.Bar(x=df.index, y=df['Trading_Volume'], name='成交量', marker_color=v_colors), row=2, col=1)
 
-            # C. 法人買賣超 (獨立分層)
+            # 法人買賣超
             i_colors = ['red' if x >= 0 else 'green' for x in df['Inst_Net']]
-            fig.add_trace(go.Bar(x=df.index, y=df['Inst_Net'], name='法人淨買賣', marker_color=i_colors), row=3, col=1)
+            fig.add_trace(go.Bar(x=df.index, y=df['Inst_Net'], name='法人買賣', marker_color=i_colors), row=3, col=1)
 
-            # D. KD
-            fig.add_trace(go.Scatter(x=df.index, y=df['K'], name='K值', line=dict(color='orange')), row=4, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['D'], name='D值', line=dict(color='dodgerblue')), row=4, col=1)
+            # KD 與 MACD (略，維持原樣)
+            fig.add_trace(go.Scatter(x=df.index, y=df['K'], name='K', line=dict(color='orange')), row=4, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['D'], name='D', line=dict(color='dodgerblue')), row=4, col=1)
+            fig.add_trace(go.Bar(x=df.index, y=df['MACD_hist'], marker_color=['red' if x>=0 else 'green' for x in df['MACD_hist']]), row=5, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['DIF'], line=dict(color='white')), row=5, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['DEA'], line=dict(color='yellow')), row=5, col=1)
 
-            # E. MACD
-            m_colors = ['red' if x >= 0 else 'green' for x in df['MACD_hist']]
-            fig.add_trace(go.Bar(x=df.index, y=df['MACD_hist'], name='MACD柱', marker_color=m_colors), row=5, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['DIF'], name='DIF', line=dict(color='white')), row=5, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['DEA'], name='DEA', line=dict(color='yellow')), row=5, col=1)
-
-            # --- 4. 佈局設定 ---
+            # --- 💡 核心優化：初始視野與滑動條 ---
             last_date = df.index[-1]
-            start_view = last_date - datetime.timedelta(days=60) # 預設顯示最近 60 天
+            # 預設只顯示最近 50 個交易日，讓 K 線看起來很肥、很清楚
+            start_view = df.index[-50] if len(df) > 50 else df.index[0]
 
             fig.update_layout(
-                height=1100,
+                height=1000,
                 template="plotly_dark",
                 hovermode="x unified",
-                xaxis_rangeslider_visible=True, # 開啟滑動條
-                xaxis=dict(range=[start_view, last_date]), # 鎖定初始視野，向左拉可看歷史資料
-                showlegend=False
+                xaxis_rangeslider_visible=True, # 下方的左右拖曳條
+                xaxis_rangeslider_thickness=0.04,
+                # 這裡設定視野：只看最近 50 天
+                xaxis=dict(range=[start_view, last_date]),
+                showlegend=False,
+                margin=dict(t=50, b=50, l=50, r=50)
             )
             
-            # 設定標題靠左
-            for i in fig['layout']['annotations']:
-                i['x'] = 0
-                i['xanchor'] = 'left'
-
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.error("查無數據，請確認代碼是否正確。")
+            st.error("找不到數據。")
