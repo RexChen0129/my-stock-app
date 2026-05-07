@@ -95,7 +95,7 @@ def fetch_stock_data_stable(stock_id):
 
 # --- 2. 介面呈現 ---
 st.set_page_config(layout="wide", page_title="專業五指標分析系統")
-st.title("🏹 專業五指標終極控盤系統 (2年數據強化版)")
+st.title("🏹 五指標控盤系統")
 
 with st.sidebar:
     st.header("數據檢索")
