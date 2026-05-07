@@ -5,7 +5,7 @@ from plotly.subplots import make_subplots
 import requests
 import datetime
 
-# --- 1. 數據抓取：徹底修正法人數據對齊問題 ---
+# --- 1. 數據抓取：強制日期對齊 (捨棄時間戳) ---
 FINMIND_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiUmF5X0NoZW4iLCJlbWFpbCI6ImNoZW5ydWl4aWFuMDBAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.cRmVp07f_wOgMG3EZNfzZP5cmBRRX7VQX5ugV9fyVEk" 
 
 @st.cache_data(ttl=300)
@@ -14,28 +14,26 @@ def fetch_all_data(stock_id):
     start_date = (datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
     
     try:
-        # 抓取股價
+        # 股價：強制轉換日期格式為 YYYY-MM-DD
         res_p = requests.get(URL, params={"dataset": "TaiwanStockPrice", "data_id": stock_id, "start_date": start_date, "token": FINMIND_TOKEN}).json()
         df = pd.DataFrame(res_p['data'])
-        df['date'] = pd.to_datetime(df['date'])
+        df['date'] = pd.to_datetime(df['date']).dt.date # 💡 關鍵 1：只保留日期
         df.set_index('date', inplace=True)
 
-        # 抓取法人：修正為「先統計再對齊」
+        # 法人：同樣強制轉換日期格式
         res_i = requests.get(URL, params={"dataset": "InstitutionalInvestorsBuySell", "data_id": stock_id, "start_date": start_date, "token": FINMIND_TOKEN}).json()
         inst_data = res_i.get('data', [])
         
         if inst_data:
             inst_df = pd.DataFrame(inst_data)
-            inst_df['date'] = pd.to_datetime(inst_df['date'])
-            # 💡 核心修正：算出每天所有法人的淨買賣總額 (股數)
+            inst_df['date'] = pd.to_datetime(inst_df['date']).dt.date # 💡 關鍵 2：只保留日期，對齊股價
             inst_df['net'] = inst_df['buy'] - inst_df['sell']
             daily_inst = inst_df.groupby('date')['net'].sum()
-            # 💡 強制對齊：確保每一天股價都有對應的法人數據，沒有就填 0
             df['Inst_Net'] = df.index.map(daily_inst).fillna(0)
         else:
             df['Inst_Net'] = 0
 
-        # 計算指標 (MA, KD, MACD)
+        # 指標計算
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA10'] = df['close'].rolling(10).mean()
         df['MA20'] = df['close'].rolling(20).mean()
@@ -50,17 +48,17 @@ def fetch_all_data(stock_id):
         st.error(f"數據出錯: {e}")
         return None
 
-# --- 2. 頁面設定 ---
+# --- 2. 介面設定 ---
 st.set_page_config(layout="wide")
-st.markdown("<style>.main { background-color: #0E1117; } .stPlotlyChart { overflow: visible !important; }</style>", unsafe_allow_html=True)
+# 💡 強制讓 Plotly 工具列顯示在最上層
+st.markdown("<style>.stPlotlyChart { z-index: 999 !important; overflow: visible !important; }</style>", unsafe_allow_html=True)
 
-st.title("🛡️ 專業控盤系統 (法人數據與縮放終極修正版)")
+st.title("🛡️ 專業控盤系統 (法人數據精準對齊版)")
 stock_id = st.sidebar.text_input("輸入代碼", value="2330")
 
 if st.sidebar.button("開始分析"):
     df = fetch_all_data(stock_id)
     if df is not None:
-        # K線寬度設定：每根 40px
         total_w = len(df) * 40
         
         fig = make_subplots(
@@ -69,7 +67,7 @@ if st.sidebar.button("開始分析"):
             subplot_titles=("K線與均線", "成交量", "法人買賣超(股)", "KD指標", "MACD柱圖")
         )
 
-        # 1. K線 (紅漲綠跌)
+        # 1. K線
         fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['max'], low=df['min'], close=df['close'],
                                      increasing_line_color='red', decreasing_line_color='green', name='K線'), row=1, col=1)
         for ma, color in zip(['MA5', 'MA10', 'MA20'], ['white', 'yellow', 'magenta']):
@@ -79,8 +77,7 @@ if st.sidebar.button("開始分析"):
         v_colors = ['red' if df['close'].iloc[i] >= df['open'].iloc[i] else 'green' for i in range(len(df))]
         fig.add_trace(go.Bar(x=df.index, y=df['Trading_Volume'], marker_color=v_colors, name='成交量'), row=2, col=1)
 
-        # 3. 法人買賣超 (柱狀圖，買紅賣綠)
-        # 💡 確保數據存在且有起伏
+        # 3. 法人買賣超 (柱狀圖)
         i_colors = ['red' if x >= 0 else 'green' for x in df['Inst_Net']]
         fig.add_trace(go.Bar(x=df.index, y=df['Inst_Net'], marker_color=i_colors, name='法人淨額'), row=3, col=1)
 
@@ -92,22 +89,19 @@ if st.sidebar.button("開始分析"):
         m_colors = ['red' if x >= 0 else 'green' for x in df['MACD_h']]
         fig.add_trace(go.Bar(x=df.index, y=df['MACD_h'], marker_color=m_colors, name='MACD柱'), row=5, col=1)
 
-        # 💡 佈局修正：強制 Y 軸自適應且顯示縮放工具
+        # 💡 佈局：將放大縮小工具強制釘死
         fig.update_layout(
             width=total_w, height=1300, template="plotly_dark",
             xaxis_rangeslider_visible=False,
-            hovermode='x unified', dragmode='pan'
+            hovermode='x unified', dragmode='zoom' # 改為 zoom 模式更直觀
         )
         
-        # 強制法人區塊 Y 軸不鎖死
-        fig.update_yaxes(autorange=True, fixedrange=False, row=3, col=1)
+        # 💡 強制解開 Y 軸鎖定，讓法人柱狀圖顯現
+        fig.update_yaxes(autorange=True, fixedrange=False)
 
-        # 💡 顯示圖表：強制開啟 config 裡的所有縮放功能
         st.plotly_chart(fig, use_container_width=False, config={
             'displayModeBar': True,           # 💡 絕對顯示工具列
+            'scrollZoom': True,              # 💡 滾輪縮放
+            'modeBarButtonsToAdd': ['zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'],
             'displaylogo': False,
-            'scrollZoom': True,              # 💡 開啟滑鼠滾輪縮放
-            'modeBarButtonsToAdd': [         # 💡 強制加入所有縮放按鈕
-                'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d', 'pan2d', 'zoom2d'
-            ],
         })
