@@ -5,96 +5,111 @@ from plotly.subplots import make_subplots
 import requests
 import datetime
 
-# --- 1. 核心數據抓取 (強化法人資料對齊) ---
+# --- 1. 核心數據處理 (確保欄位絕對存在) ---
 FINMIND_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiUmF5X0NoZW4iLCJlbWFpbCI6ImNoZW5ydWl4aWFuMDBAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.cRmVp07f_wOgMG3EZNfzZP5cmBRRX7VQX5ugV9fyVEk" 
 
 @st.cache_data(ttl=300)
-def fetch_complete_data(stock_id):
+def get_all_indicators(stock_id):
     URL = "https://api.finmindtrade.com/api/v4/data"
     start_date = (datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
     
     try:
-        # 抓取股價
+        # A. 股價數據
         res_p = requests.get(URL, params={"dataset": "TaiwanStockPrice", "data_id": stock_id, "start_date": start_date, "token": FINMIND_TOKEN}).json()
         df = pd.DataFrame(res_p['data'])
         df['date'] = pd.to_datetime(df['date'])
         df.set_index('date', inplace=True)
-        df.sort_index(inplace=True)
-
-        # 💡 重點：預先建立法人欄位，避免 KeyError 崩潰
+        
+        # B. 法人買賣超 (預防 KeyError)
         df['Inst_Net'] = 0.0
-
-        # 抓取法人買賣超
         res_i = requests.get(URL, params={"dataset": "InstitutionalInvestorsBuySell", "data_id": stock_id, "start_date": start_date, "token": FINMIND_TOKEN}).json()
         inst_data = res_i.get('data', [])
-        
         if inst_data:
             inst_df = pd.DataFrame(inst_data)
             inst_df['date'] = pd.to_datetime(inst_df['date'])
-            # 計算每日三大法人合計買賣淨額
             inst_sum = inst_df.groupby('date').apply(lambda x: x['buy'].sum() - x['sell'].sum())
-            # 填入對應日期
             df.update(inst_sum.rename('Inst_Net'))
 
-        # 計算其他指標 (KD / MACD ...)
-        # ... (此處省略部分重複計算邏輯以保持精簡)
-        
+        # C. 計算 MA (5/10/20)
+        df['MA5'] = df['close'].rolling(5).mean()
+        df['MA10'] = df['close'].rolling(10).mean()
+        df['MA20'] = df['close'].rolling(20).mean()
+
+        # D. 計算 KD 指標
+        low_min = df['min'].rolling(9).min()
+        high_max = df['max'].rolling(9).max()
+        rsv = (df['close'] - low_min) / (high_max - low_min) * 100
+        df['K'] = rsv.ewm(com=2).mean()
+        df['D'] = df['K'].ewm(com=2).mean()
+
+        # E. 計算 MACD
+        exp1 = df['close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['close'].ewm(span=26, adjust=False).mean()
+        df['DIF'] = exp1 - exp2
+        df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
+        df['MACD_Hist'] = df['DIF'] - df['DEA']
+
         return df
     except Exception as e:
-        st.error(f"連線或資料處理錯誤: {e}")
+        st.error(f"數據加載出錯: {e}")
         return None
 
-# --- 2. 介面與 CSS 優化 ---
+# --- 2. 介面設定 ---
 st.set_page_config(layout="wide")
-st.markdown("""
-    <style>
-    .scroll-wrapper { overflow-x: auto !important; width: 100%; background: #0E1117; }
-    </style>
-""", unsafe_allow_html=True)
+st.title("📊 專業全指標控盤系統 (5合1最終修正版)")
 
-st.title("🚀 專業控盤系統 (全指標修復版)")
 stock_id = st.sidebar.text_input("輸入台股代碼", value="2330")
-
-if st.sidebar.button("開始分析"):
-    df = fetch_complete_data(stock_id)
-    
+if st.sidebar.button("執行全指標分析"):
+    df = get_all_indicators(stock_id)
     if df is not None:
-        # 💡 解決「K線太細」：強制設定每根 K 線佔 45 像素，總寬度會隨天數自動延伸
-        dynamic_width = max(len(df) * 45, 1200) 
-
+        # 建立 5 個子圖
         fig = make_subplots(
             rows=5, cols=1, shared_xaxes=True, 
             vertical_spacing=0.02,
-            row_heights=[0.4, 0.1, 0.15, 0.15, 0.2],
-            subplot_titles=("K線(MA5/10/20)", "成交量", "法人買賣超", "KD", "MACD")
+            row_heights=[0.35, 0.1, 0.15, 0.2, 0.2],
+            subplot_titles=("1. K線與均線", "2. 成交量", "3. 法人買賣超", "4. KD指標", "5. MACD")
         )
 
-        # 1. K線圖
-        fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['max'], low=df['min'], close=df['close'], name='K線'), row=1, col=1)
+        # 🎨 顏色邏輯：漲紅跌綠
+        # K線顏色
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df['open'], high=df['max'], low=df['min'], close=df['close'],
+            increasing_line_color='red', decreasing_line_color='green', name='K線'
+        ), row=1, col=1)
+        
+        # 均線
+        for ma, color in zip(['MA5', 'MA10', 'MA20'], ['white', 'yellow', 'magenta']):
+            fig.add_trace(go.Scatter(x=df.index, y=df[ma], name=ma, line=dict(width=1.5, color=color)), row=1, col=1)
 
-        # 2. 成交量
-        fig.add_trace(go.Bar(x=df.index, y=df['Trading_Volume'], name='成交量', marker_color='gray'), row=2, col=1)
+        # 🎨 成交量顏色：今日收盤 > 昨日收盤 為紅
+        vol_colors = ['red' if df['close'].iloc[i] >= df['close'].iloc[i-1] else 'green' for i in range(len(df))]
+        fig.add_trace(go.Bar(x=df.index, y=df['Trading_Volume'], marker_color=vol_colors, name='成交量'), row=2, col=1)
 
-        # 3. 法人買賣超 (這次絕對會有資料)
-        colors = ['red' if x >= 0 else 'green' for x in df['Inst_Net']]
-        fig.add_trace(go.Bar(x=df.index, y=df['Inst_Net'], marker_color=colors, name='法人淨額'), row=3, col=1)
+        # 🎨 法人買賣超顏色：正數紅、負數綠
+        inst_colors = ['red' if x >= 0 else 'green' for x in df['Inst_Net']]
+        fig.add_trace(go.Bar(x=df.index, y=df['Inst_Net'], marker_color=inst_colors, name='法人淨額'), row=3, col=1)
 
-        # ... (KD/MACD 繪圖省略)
+        # 4. KD線
+        fig.add_trace(go.Scatter(x=df.index, y=df['K'], name='K線', line=dict(color='skyblue')), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['D'], name='D線', line=dict(color='orange')), row=4, col=1)
 
+        # 5. MACD (包含柱狀圖紅綠色)
+        macd_colors = ['red' if x >= 0 else 'green' for x in df['MACD_Hist']]
+        fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], marker_color=macd_colors, name='MACD柱狀'), row=5, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['DIF'], name='DIF', line=dict(color='white')), row=5, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['DEA'], name='DEA', line=dict(color='yellow')), row=5, col=1)
+
+        # 圖表整體佈局與縮放
         fig.update_layout(
-            width=dynamic_width, # 💡 強制寬度，解決「一次看很多根」的問題
-            height=1100,
+            height=1200, width=1600,
             template="plotly_dark",
             xaxis_rangeslider_visible=False,
-            hovermode="x unified",
-            dragmode="pan" # 預設為抓手平移模式，方便你左右拖拽
+            dragmode='pan',
+            hovermode='x unified'
         )
 
-        # 💡 重點：開啟所有縮放按鈕
-        st.write('<div class="scroll-wrapper">', unsafe_allow_html=True)
-        st.plotly_chart(fig, use_container_width=False, config={
-            'displayModeBar': True, # 顯示右上角工具列
-            'scrollZoom': True,     # 允許滾輪縮放
-            'modeBarButtonsToAdd': ['zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'] # 確保放大縮小按鈕出現
+        st.plotly_chart(fig, use_container_width=True, config={
+            'displayModeBar': True,
+            'scrollZoom': True,
+            'modeBarButtonsToAdd': ['zoomIn2d', 'zoomOut2d', 'autoScale2d']
         })
-        st.write('</div>', unsafe_allow_html=True)
