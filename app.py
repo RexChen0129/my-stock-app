@@ -5,8 +5,8 @@ from plotly.subplots import make_subplots
 import requests
 import datetime
 
-# --- 1. 數據抓取核心 ---
-FINMIND_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiUmF5X0NoZW4iLCJlbWFpbCI6ImNoZW5ydWl4aWFuMDBAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.cRmVp07f_wOgMG3EZNfzZP5cmBRRX7VQX5ugV9fyVEk" # 建議填入您的 Token 以避免限流
+# --- 1. 數據抓取與極精密對齊 ---
+FINMIND_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiUmF5X0NoZW4iLCJlbWFpbCI6ImNoZW5ydWl4aWFuMDBAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.cRmVp07f_wOgMG3EZNfzZP5cmBRRX7VQX5ugV9fyVEk" # 建議填入您的 Token
 
 @st.cache_data(ttl=300)
 def fetch_final_data(stock_id):
@@ -14,46 +14,50 @@ def fetch_final_data(stock_id):
     start_date = (datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
     
     try:
-        # 抓取股價
+        # 1. 抓取股價
         res_p = requests.get(URL, params={"dataset": "TaiwanStockPrice", "data_id": stock_id, "start_date": start_date, "token": FINMIND_TOKEN}).json()
         df = pd.DataFrame(res_p['data'])
-        # 💡 核心修正：將日期統編為 YYYY-MM-DD 字串格式，這是目前最穩定的對齊方式
-        df['date_key'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-        df = df.sort_values('date_key')
+        if df.empty:
+            return None
+            
+        # 💡 強制統一日期格式為『純日期』對象，移除任何時間與時區干擾
+        df['date'] = pd.to_datetime(df['date']).dt.normalize()
+        df = df.sort_values('date')
 
-        # 抓取法人 (真實數據)
+        # 2. 抓取法人 (真實數據)
         res_i = requests.get(URL, params={"dataset": "InstitutionalInvestorsBuySell", "data_id": stock_id, "start_date": start_date, "token": FINMIND_TOKEN}).json()
         inst_data = res_i.get('data', [])
         
         if inst_data:
             inst_df = pd.DataFrame(inst_data)
-            # 同樣將法人日期轉為 YYYY-MM-DD
-            inst_df['date_key'] = pd.to_datetime(inst_df['date']).dt.strftime('%Y-%m-%d')
-            # 算出單日法人淨額 (買-賣)
+            # 💡 同樣強制轉為純日期對象
+            inst_df['date'] = pd.to_datetime(inst_df['date']).dt.normalize()
             inst_df['net'] = inst_df['buy'] - inst_df['sell']
-            # 💡 必須先 GroupBy，因為同一天會有外資、投信、自營商三筆數據
-            daily_inst = inst_df.groupby('date_key')['net'].sum().reset_index()
             
-            # 使用 merge 將法人真實數據掛載到股價表上
-            df = pd.merge(df, daily_inst, on='date_key', how='left').fillna(0)
+            # 先將三大法人(外資/投信/自營)同日數據加總
+            daily_inst = inst_df.groupby('date')['net'].sum().reset_index()
+            
+            # 使用 merge 進行左對齊
+            df = pd.merge(df, daily_inst, on='date', how='left').fillna(0)
             df.rename(columns={'net': 'Inst_Net'}, inplace=True)
         else:
             df['Inst_Net'] = 0
 
-        # 指標計算
-        df.set_index('date_key', inplace=True)
-        # 1. 三均線
+        # 3. 計算技術指標
+        df.set_index('date', inplace=True)
+        
+        # 三均線
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA10'] = df['close'].rolling(10).mean()
         df['MA20'] = df['close'].rolling(20).mean()
         
-        # 2. KD
+        # KD 指標
         l9, h9 = df['min'].rolling(9).min(), df['max'].rolling(9).max()
         rsv = (df['close'] - l9) / (h9 - l9) * 100
         df['K'] = rsv.ewm(com=2).mean()
         df['D'] = df['K'].ewm(com=2).mean()
         
-        # 3. MACD
+        # MACD 指標
         e12 = df['close'].ewm(span=12, adjust=False).mean()
         e26 = df['close'].ewm(span=26, adjust=False).mean()
         df['DIF'] = e12 - e26
@@ -62,33 +66,34 @@ def fetch_final_data(stock_id):
         
         return df
     except Exception as e:
-        st.error(f"數據讀取錯誤: {e}")
+        st.error(f"數據讀取或對齊錯誤: {e}")
         return None
 
 # --- 2. 頁面呈現 ---
 st.set_page_config(layout="wide")
-st.title("📊 專業五指標交易儀表板")
+st.title("📊 專業五指標交易儀表板 (真實數據版)")
 
 with st.sidebar:
+    st.header("參數設定")
     stock_id = st.text_input("輸入台股代碼", value="2330")
     btn = st.button("更新數據")
 
 if btn or stock_id:
     df = fetch_final_data(stock_id)
     if df is not None:
-        # 計算圖表總寬度，確保 K 線比例正常
+        # 計算圖表寬度以適應 K 線
         total_width = len(df) * 40
         
-        # 建立 5 個獨立軌道
+        # 建立 5 個獨立子圖軌道
         fig = make_subplots(
             rows=5, cols=1, 
             shared_xaxes=True, 
             vertical_spacing=0.02,
             row_heights=[0.35, 0.1, 0.15, 0.2, 0.2],
-            subplot_titles=("K線與均線 (5/10/20)", "成交量", "法人買賣超 (真實數據)", "KD 指標", "MACD 趨勢")
+            subplot_titles=("1. K線與均線 (5/10/20)", "2. 成交量", "3. 法人買賣超 (真實數據)", "4. KD 指標", "5. MACD 趨勢")
         )
 
-        # 1. K線 + 3MA
+        # 1. K線棒 + 3MA
         fig.add_trace(go.Candlestick(
             x=df.index, open=df['open'], high=df['max'], low=df['min'], close=df['close'],
             increasing_line_color='red', decreasing_line_color='green', name='K線'
@@ -125,14 +130,14 @@ if btn or stock_id:
             showlegend=True
         )
         
-        # 💡 解除 Y 軸鎖定，讓法人和成交量有正確的起伏比例
+        # 讓各子圖 Y 軸自動適應數據
         fig.update_yaxes(autorange=True, fixedrange=False)
 
         st.plotly_chart(fig, use_container_width=False, config={
             'displayModeBar': True,
-            'scrollZoom': True,           # 💡 滾輪縮放
+            'scrollZoom': True,           
             'displaylogo': False,
-            'modeBarButtonsToRemove': [   # 💡 移除放大鏡按鈕
+            'modeBarButtonsToRemove': [   
                 'zoom2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d', 'select2d', 'lasso2d'
             ],
         })
